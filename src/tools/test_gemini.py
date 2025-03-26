@@ -45,7 +45,7 @@ def test_chat_format():
         model=model_name,
         contents='What is 1+1?',
         config={
-            'system_instruction': 'You are a helpful math tutor.',
+            'system_instruction': '你是一位乐于助人的数学辅导老师。',
             'temperature': 0.3,
         }
     )

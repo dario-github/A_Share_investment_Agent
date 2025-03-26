@@ -7,41 +7,93 @@ def valuation_agent(state: AgentState):
     """Performs detailed valuation analysis using multiple methodologies."""
     show_reasoning = state["metadata"]["show_reasoning"]
     data = state["data"]
-    metrics = data["financial_metrics"][0]
-    current_financial_line_item = data["financial_line_items"][0]
-    previous_financial_line_item = data["financial_line_items"][1]
-    market_cap = data["market_cap"]
+
+    # 优先使用优化后的数据结构
+    if "financials" in data and data["financials"]:
+        compact_metrics = data["financials"]
+        earnings_growth = compact_metrics.get("eg", 0)
+    else:
+        # 兼容旧版数据结构
+        metrics = data["financial_metrics"][0] if data["financial_metrics"] and len(data["financial_metrics"]) > 0 else {}
+        earnings_growth = metrics.get("earnings_growth", 0)
+
+    # 获取财务报表数据
+    if "statements" in data and data["statements"] and len(data["statements"]) >= 2:
+        # 使用优化后的数据结构
+        current_financial = data["statements"][0]
+        previous_financial = data["statements"][1] if len(data["statements"]) > 1 else {}
+
+        # 获取数据，注意单位可能是百万
+        unit_multiplier = 1000000 if current_financial.get("unit") == "M" else 1
+
+        # 获取当前期数据
+        net_income = current_financial.get("ni", 0) * unit_multiplier
+        depreciation = current_financial.get("da", 0) * unit_multiplier
+        capex = current_financial.get("capex", 0) * unit_multiplier
+        free_cash_flow = current_financial.get("fcf", 0) * unit_multiplier
+        current_working_capital = current_financial.get("wc", 0) * unit_multiplier
+
+        # 获取上一期数据
+        previous_working_capital = previous_financial.get("wc", 0)
+        if "unit" in previous_financial and previous_financial.get("unit") == "M":
+            previous_working_capital *= 1000000
+    else:
+        # 兼容旧版数据结构
+        current_financial_line_item = data["financial_line_items"][0] if data["financial_line_items"] and len(data["financial_line_items"]) > 0 else {}
+        previous_financial_line_item = data["financial_line_items"][1] if data["financial_line_items"] and len(data["financial_line_items"]) > 1 else {}
+
+        net_income = current_financial_line_item.get('net_income', 0)
+        depreciation = current_financial_line_item.get('depreciation_and_amortization', 0)
+        capex = current_financial_line_item.get('capital_expenditure', 0)
+        free_cash_flow = current_financial_line_item.get('free_cash_flow', 0)
+        current_working_capital = current_financial_line_item.get('working_capital', 0)
+        previous_working_capital = previous_financial_line_item.get('working_capital', 0)
+
+    # 获取市值数据
+    if "market" in data and data["market"]:
+        # 使用优化后的数据结构
+        market_data = data["market"]
+        unit_multiplier = 1000000 if market_data.get("unit") == "M" else 1
+        market_cap = market_data.get("mcap", 0) * unit_multiplier
+    else:
+        # 兼容旧版数据结构
+        market_cap = data.get("market_cap", 0)
+        if not market_cap and "market_data" in data and data["market_data"]:
+            market_cap = data["market_data"].get("market_cap", 0)
+
+    # 确保市值不为零，避免除零错误
+    if market_cap <= 0:
+        market_cap = 1  # 设置为1以避免除零错误，但会导致极端的估值差距
+        print("警告: 市值为零或负值，将使用默认值1进行计算")
 
     reasoning = {}
 
     # Calculate working capital change
-    working_capital_change = (current_financial_line_item.get(
-        'working_capital') or 0) - (previous_financial_line_item.get('working_capital') or 0)
+    working_capital_change = current_working_capital - previous_working_capital
 
     # Owner Earnings Valuation (Buffett Method)
     owner_earnings_value = calculate_owner_earnings_value(
-        net_income=current_financial_line_item.get('net_income'),
-        depreciation=current_financial_line_item.get(
-            'depreciation_and_amortization'),
-        capex=current_financial_line_item.get('capital_expenditure'),
+        net_income=net_income,
+        depreciation=depreciation,
+        capex=capex,
         working_capital_change=working_capital_change,
-        growth_rate=metrics["earnings_growth"],
+        growth_rate=earnings_growth,
         required_return=0.15,
         margin_of_safety=0.25
     )
 
     # DCF Valuation
     dcf_value = calculate_intrinsic_value(
-        free_cash_flow=current_financial_line_item.get('free_cash_flow'),
-        growth_rate=metrics["earnings_growth"],
+        free_cash_flow=free_cash_flow,
+        growth_rate=earnings_growth,
         discount_rate=0.10,
         terminal_growth_rate=0.03,
         num_years=5,
     )
 
     # Calculate combined valuation gap (average of both methods)
-    dcf_gap = (dcf_value - market_cap) / market_cap
-    owner_earnings_gap = (owner_earnings_value - market_cap) / market_cap
+    dcf_gap = (dcf_value - market_cap) / market_cap if market_cap > 0 else 0
+    owner_earnings_gap = (owner_earnings_value - market_cap) / market_cap if market_cap > 0 else 0
     valuation_gap = (dcf_gap + owner_earnings_gap) / 2
 
     if valuation_gap > 0.10:  # Changed from 0.15 to 0.10 (10% undervalued)
@@ -69,7 +121,7 @@ def valuation_agent(state: AgentState):
 
     message = HumanMessage(
         content=json.dumps(message_content),
-        name="valuation_agent",
+        name="valuation",
     )
 
     if show_reasoning:

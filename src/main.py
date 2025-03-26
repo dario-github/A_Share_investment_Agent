@@ -20,7 +20,7 @@ def run_hedge_fund(ticker: str, start_date: str, end_date: str, portfolio: dict,
         {
             "messages": [
                 HumanMessage(
-                    content="Make a trading decision based on the provided data.",
+                    content="根据提供的数据做出交易决策。",
                 )
             ],
             "data": {
@@ -79,8 +79,10 @@ if __name__ == "__main__":
                         help='Show reasoning from each agent')
     parser.add_argument('--num-of-news', type=int, default=5,
                         help='Number of news articles to analyze for sentiment (default: 5)')
-    parser.add_argument('--initial-capital', type=float, default=100000.0,
-                        help='Initial cash amount (default: 100,000)')
+    parser.add_argument('--position-ratio', type=float, default=30.0,
+                        help='Position ratio as percentage of total capital (default: 30%)')
+    parser.add_argument('--holding-cost', type=float, default=0.0,
+                        help='Holding cost per share if already holding (default: 0)')
     parser.add_argument('--initial-position', type=int, default=0,
                         help='Initial stock position (default: 0)')
 
@@ -110,8 +112,9 @@ if __name__ == "__main__":
 
     # Configure portfolio
     portfolio = {
-        "cash": args.initial_capital,
-        "stock": args.initial_position
+        "position_ratio": args.position_ratio,
+        "holding_cost": args.holding_cost,
+        "initial_position": args.initial_position
     }
 
     result = run_hedge_fund(

@@ -15,203 +15,137 @@ from src.tools.api import prices_to_df
 ##### Technical Analyst #####
 def technical_analyst_agent(state: AgentState):
     """
-    Sophisticated technical analysis system that combines multiple trading strategies:
-    1. Trend Following
-    2. Mean Reversion
-    3. Momentum
-    4. Volatility Analysis
-    5. Statistical Arbitrage Signals
+    Technical analysis agent that analyzes price patterns and indicators
+    to generate trading signals.
     """
     show_reasoning = state["metadata"]["show_reasoning"]
     data = state["data"]
-    prices = data["prices"]
-    prices_df = prices_to_df(prices)
 
-    # Initialize confidence variable
-    confidence = 0.0
-
-    # Calculate indicators
-    # 1. MACD (Moving Average Convergence Divergence)
-    macd_line, signal_line = calculate_macd(prices_df)
-
-    # 2. RSI (Relative Strength Index)
-    rsi = calculate_rsi(prices_df)
-
-    # 3. Bollinger Bands (Bollinger Bands)
-    upper_band, lower_band = calculate_bollinger_bands(prices_df)
-
-    # 4. OBV (On-Balance Volume)
-    obv = calculate_obv(prices_df)
-
-    # Generate individual signals
-    signals = []
-
-    # MACD signal
-    if macd_line.iloc[-2] < signal_line.iloc[-2] and macd_line.iloc[-1] > signal_line.iloc[-1]:
-        signals.append('bullish')
-    elif macd_line.iloc[-2] > signal_line.iloc[-2] and macd_line.iloc[-1] < signal_line.iloc[-1]:
-        signals.append('bearish')
+    # 尝试获取价格数据，兼容不同的键名
+    if "price_history" in data:
+        prices_df = data["price_history"]
+    elif "prices" in data:
+        prices = data["prices"]
+        prices_df = prices_to_df(prices)
     else:
-        signals.append('neutral')
-
-    # RSI signal
-    if rsi.iloc[-1] < 30:
-        signals.append('bullish')
-    elif rsi.iloc[-1] > 70:
-        signals.append('bearish')
-    else:
-        signals.append('neutral')
-
-    # Bollinger Bands signal
-    current_price = prices_df['close'].iloc[-1]
-    if current_price < lower_band.iloc[-1]:
-        signals.append('bullish')
-    elif current_price > upper_band.iloc[-1]:
-        signals.append('bearish')
-    else:
-        signals.append('neutral')
-
-    # OBV signal
-    obv_slope = obv.diff().iloc[-5:].mean()
-    if obv_slope > 0:
-        signals.append('bullish')
-    elif obv_slope < 0:
-        signals.append('bearish')
-    else:
-        signals.append('neutral')
-
-    # Calculate price drop
-    price_drop = (prices_df['close'].iloc[-1] -
-                  prices_df['close'].iloc[-5]) / prices_df['close'].iloc[-5]
-
-    # Add price drop signal
-    if price_drop < -0.05 and rsi.iloc[-1] < 40:  # 5% drop and RSI below 40
-        signals.append('bullish')
-        confidence += 0.2  # Increase confidence for oversold conditions
-    elif price_drop < -0.03 and rsi.iloc[-1] < 45:  # 3% drop and RSI below 45
-        signals.append('bullish')
-        confidence += 0.1
-
-    # Add reasoning collection
-    reasoning = {
-        "MACD": {
-            "signal": signals[0],
-            "details": f"MACD Line crossed {'above' if signals[0] == 'bullish' else 'below' if signals[0] == 'bearish' else 'neither above nor below'} Signal Line"
-        },
-        "RSI": {
-            "signal": signals[1],
-            "details": f"RSI is {rsi.iloc[-1]:.2f} ({'oversold' if signals[1] == 'bullish' else 'overbought' if signals[1] == 'bearish' else 'neutral'})"
-        },
-        "Bollinger": {
-            "signal": signals[2],
-            "details": f"Price is {'below lower band' if signals[2] == 'bullish' else 'above upper band' if signals[2] == 'bearish' else 'within bands'}"
-        },
-        "OBV": {
-            "signal": signals[3],
-            "details": f"OBV slope is {obv_slope:.2f} ({signals[3]})"
+        # 如果找不到价格数据，返回中性信号
+        message_content = {
+            "signal": "neutral",
+            "confidence": "0%",
+            "reasoning": {"error": "No price data found in state"}
         }
-    }
-
-    # Determine overall signal
-    bullish_signals = signals.count('bullish')
-    bearish_signals = signals.count('bearish')
-
-    if bullish_signals > bearish_signals:
-        overall_signal = 'bullish'
-    elif bearish_signals > bullish_signals:
-        overall_signal = 'bearish'
-    else:
-        overall_signal = 'neutral'
-
-    # Calculate confidence level based on the proportion of indicators agreeing
-    total_signals = len(signals)
-    confidence = max(bullish_signals, bearish_signals) / total_signals
-
-    # Generate the message content
-    message_content = {
-        "signal": overall_signal,
-        "confidence": f"{round(confidence * 100)}%",
-        "reasoning": {
-            "MACD": reasoning["MACD"],
-            "RSI": reasoning["RSI"],
-            "Bollinger": reasoning["Bollinger"],
-            "OBV": reasoning["OBV"]
+        message = HumanMessage(
+            content=json.dumps(message_content),
+            name="technicals",
+        )
+        return {
+            "messages": [message],
+            "data": data,
         }
-    }
 
-    # 1. Trend Following Strategy
-    trend_signals = calculate_trend_signals(prices_df)
+    # 确保 prices_df 不为空
+    if prices_df is None or len(prices_df) < 20:  # 至少需要20个数据点
+        message_content = {
+            "signal": "neutral",
+            "confidence": "0%",
+            "reasoning": {"error": "Insufficient price data for technical analysis"}
+        }
+        message = HumanMessage(
+            content=json.dumps(message_content),
+            name="technicals",
+        )
+        return {
+            "messages": [message],
+            "data": data,
+        }
 
-    # 2. Mean Reversion Strategy
-    mean_reversion_signals = calculate_mean_reversion_signals(prices_df)
+    # 计算各种技术分析策略的信号
+    try:
+        trend_signals = calculate_trend_signals(prices_df)
+        mean_reversion_signals = calculate_mean_reversion_signals(prices_df)
+        momentum_signals = calculate_momentum_signals(prices_df)
+        volatility_signals = calculate_volatility_signals(prices_df)
+        stat_arb_signals = calculate_stat_arb_signals(prices_df)
 
-    # 3. Momentum Strategy
-    momentum_signals = calculate_momentum_signals(prices_df)
+        # 安全检查：确保所有信号的 confidence 值不是 NaN
+        for signal_dict in [trend_signals, mean_reversion_signals, momentum_signals, volatility_signals, stat_arb_signals]:
+            if pd.isna(signal_dict['confidence']):
+                signal_dict['confidence'] = 0.5  # 使用默认值0.5替代NaN
 
-    # 4. Volatility Strategy
-    volatility_signals = calculate_volatility_signals(prices_df)
+        # 组合不同策略的信号
+        combined_signal = weighted_signal_combination(
+            [
+                trend_signals,
+                mean_reversion_signals,
+                momentum_signals,
+                volatility_signals,
+                stat_arb_signals
+            ],
+            [0.3, 0.2, 0.25, 0.15, 0.1]  # 权重
+        )
 
-    # 5. Statistical Arbitrage Signals
-    stat_arb_signals = calculate_stat_arb_signals(prices_df)
-
-    # Combine all signals using a weighted ensemble approach
-    strategy_weights = {
-        'trend': 0.30,
-        'mean_reversion': 0.25,  # Increased weight for mean reversion
-        'momentum': 0.25,
-        'volatility': 0.15,
-        'stat_arb': 0.05
-    }
-
-    combined_signal = weighted_signal_combination({
-        'trend': trend_signals,
-        'mean_reversion': mean_reversion_signals,
-        'momentum': momentum_signals,
-        'volatility': volatility_signals,
-        'stat_arb': stat_arb_signals
-    }, strategy_weights)
-
-    # Generate detailed analysis report
-    analysis_report = {
-        "signal": combined_signal['signal'],
-        "confidence": f"{round(combined_signal['confidence'] * 100)}%",
-        "strategy_signals": {
-            "trend_following": {
-                "signal": trend_signals['signal'],
-                "confidence": f"{round(trend_signals['confidence'] * 100)}%",
-                "metrics": normalize_pandas(trend_signals['metrics'])
-            },
-            "mean_reversion": {
-                "signal": mean_reversion_signals['signal'],
-                "confidence": f"{round(mean_reversion_signals['confidence'] * 100)}%",
-                "metrics": normalize_pandas(mean_reversion_signals['metrics'])
-            },
-            "momentum": {
-                "signal": momentum_signals['signal'],
-                "confidence": f"{round(momentum_signals['confidence'] * 100)}%",
-                "metrics": normalize_pandas(momentum_signals['metrics'])
-            },
-            "volatility": {
-                "signal": volatility_signals['signal'],
-                "confidence": f"{round(volatility_signals['confidence'] * 100)}%",
-                "metrics": normalize_pandas(volatility_signals['metrics'])
-            },
-            "statistical_arbitrage": {
-                "signal": stat_arb_signals['signal'],
-                "confidence": f"{round(stat_arb_signals['confidence'] * 100)}%",
-                "metrics": normalize_pandas(stat_arb_signals['metrics'])
+        # 构建分析报告
+        analysis_report = {
+            "signal": combined_signal['signal'],
+            "confidence": f"{round(float(combined_signal['confidence']) * 100)}%",
+            "strategy_signals": {
+                "trend_following": {
+                    "signal": trend_signals['signal'],
+                    "confidence": f"{round(float(trend_signals['confidence']) * 100)}%",
+                    "metrics": normalize_pandas(trend_signals['metrics'])
+                },
+                "mean_reversion": {
+                    "signal": mean_reversion_signals['signal'],
+                    "confidence": f"{round(float(mean_reversion_signals['confidence']) * 100)}%",
+                    "metrics": normalize_pandas(mean_reversion_signals['metrics'])
+                },
+                "momentum": {
+                    "signal": momentum_signals['signal'],
+                    "confidence": f"{round(float(momentum_signals['confidence']) * 100)}%",
+                    "metrics": normalize_pandas(momentum_signals['metrics'])
+                },
+                "volatility": {
+                    "signal": volatility_signals['signal'],
+                    "confidence": f"{round(float(volatility_signals['confidence']) * 100)}%",
+                    "metrics": normalize_pandas(volatility_signals['metrics'])
+                },
+                "statistical_arbitrage": {
+                    "signal": stat_arb_signals['signal'],
+                    "confidence": f"{round(float(stat_arb_signals['confidence']) * 100)}%",
+                    "metrics": normalize_pandas(stat_arb_signals['metrics'])
+                }
             }
         }
+    except Exception as e:
+        # 捕获所有异常，返回中性信号
+        print(f"Technical analysis error: {str(e)}")
+        message_content = {
+            "signal": "neutral",
+            "confidence": "0%",
+            "reasoning": {"error": f"Error in technical analysis: {str(e)}"}
+        }
+        message = HumanMessage(
+            content=json.dumps(message_content),
+            name="technicals",
+        )
+        return {
+            "messages": [message],
+            "data": data,
+        }
+
+    message_content = {
+        "signal": analysis_report["signal"],
+        "confidence": analysis_report["confidence"],
+        "reasoning": analysis_report["strategy_signals"]
     }
 
-    # Create the technical analyst message
     message = HumanMessage(
-        content=json.dumps(analysis_report),
-        name="technical_analyst_agent",
+        content=json.dumps(message_content),
+        name="technicals",
     )
 
     if show_reasoning:
-        show_agent_reasoning(analysis_report, "Technical Analyst")
+        show_agent_reasoning(message_content, "Technical Analysis Agent")
 
     return {
         "messages": [message],
@@ -238,8 +172,13 @@ def calculate_trend_signals(prices_df):
     short_trend = ema_8 > ema_21
     medium_trend = ema_21 > ema_55
 
+    # 安全检查：确保 ADX 值不是 NaN
+    adx_value = adx['adx'].iloc[-1]
+    if pd.isna(adx_value):
+        adx_value = 25.0  # 使用中等强度的默认值
+
     # Combine signals with confidence weighting
-    trend_strength = adx['adx'].iloc[-1] / 100.0
+    trend_strength = adx_value / 100.0
 
     if short_trend.iloc[-1] and medium_trend.iloc[-1]:
         signal = 'bullish'
@@ -255,9 +194,11 @@ def calculate_trend_signals(prices_df):
         'signal': signal,
         'confidence': confidence,
         'metrics': {
-            'adx': float(adx['adx'].iloc[-1]),
+            'adx': float(adx_value),
             'trend_strength': float(trend_strength),
             # 'ichimoku': ichimoku
+            'short_trend': bool(short_trend.iloc[-1]),
+            'medium_trend': bool(medium_trend.iloc[-1])
         }
     }
 
@@ -280,8 +221,13 @@ def calculate_mean_reversion_signals(prices_df):
 
     # Mean reversion signals
     extreme_z_score = abs(z_score.iloc[-1]) > 2
-    price_vs_bb = (prices_df['close'].iloc[-1] - bb_lower.iloc[-1]
-                   ) / (bb_upper.iloc[-1] - bb_lower.iloc[-1])
+
+    # 安全计算 price_vs_bb
+    bb_range = bb_upper.iloc[-1] - bb_lower.iloc[-1]
+    if pd.isna(bb_range) or bb_range == 0:
+        price_vs_bb = 0.5  # 如果分母为零或NaN，则设置为中间值0.5
+    else:
+        price_vs_bb = (prices_df['close'].iloc[-1] - bb_lower.iloc[-1]) / bb_range
 
     # Combine signals
     if z_score.iloc[-1] < -2 and price_vs_bb < 0.2:
@@ -455,6 +401,13 @@ def calculate_stat_arb_signals(prices_df):
 def weighted_signal_combination(signals, weights):
     """
     Combines multiple trading signals using a weighted approach
+
+    Args:
+        signals: 列表形式的信号字典，每个字典包含 'signal' 和 'confidence' 键
+        weights: 列表形式的权重，与 signals 列表长度相同
+
+    Returns:
+        包含 'signal' 和 'confidence' 键的字典
     """
     # Convert signals to numeric values
     signal_values = {
@@ -466,13 +419,35 @@ def weighted_signal_combination(signals, weights):
     weighted_sum = 0
     total_confidence = 0
 
-    for strategy, signal in signals.items():
-        numeric_signal = signal_values[signal['signal']]
-        weight = weights[strategy]
-        confidence = signal['confidence']
+    # 检查参数类型，支持两种调用方式
+    if isinstance(signals, dict) and isinstance(weights, dict):
+        # 原始调用方式：signals 和 weights 都是字典
+        for strategy, signal in signals.items():
+            numeric_signal = signal_values[signal['signal']]
+            weight = weights[strategy]
+            confidence = signal['confidence']
 
-        weighted_sum += numeric_signal * weight * confidence
-        total_confidence += weight * confidence
+            weighted_sum += numeric_signal * weight * confidence
+            total_confidence += weight * confidence
+    elif isinstance(signals, list) and isinstance(weights, list):
+        # 新的调用方式：signals 和 weights 都是列表
+        if len(signals) != len(weights):
+            print(f"警告：信号列表长度 ({len(signals)}) 与权重列表长度 ({len(weights)}) 不匹配")
+            # 使用较短的长度
+            length = min(len(signals), len(weights))
+            signals = signals[:length]
+            weights = weights[:length]
+
+        for i, signal in enumerate(signals):
+            numeric_signal = signal_values[signal['signal']]
+            weight = weights[i]
+            confidence = signal['confidence']
+
+            weighted_sum += numeric_signal * weight * confidence
+            total_confidence += weight * confidence
+    else:
+        print(f"警告：不支持的参数类型 - signals: {type(signals)}, weights: {type(weights)}")
+        return {'signal': 'neutral', 'confidence': 0.5}
 
     # Normalize the weighted sum
     if total_confidence > 0:

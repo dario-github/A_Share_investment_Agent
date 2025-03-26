@@ -50,7 +50,7 @@ def sentiment_agent(state: AgentState):
     # 创建消息
     message = HumanMessage(
         content=json.dumps(message_content),
-        name="sentiment_agent",
+        name="sentiment",
     )
 
     return {

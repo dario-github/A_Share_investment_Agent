@@ -2,6 +2,14 @@ import os
 import sys
 import json
 from datetime import datetime
+
+# 导入akshare配置模块
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from src.tools.akshare_config import configure_akshare_timeout
+
+# 设置akshare超时时间为30秒
+configure_akshare_timeout(30)
+
 import akshare as ak
 import requests
 from bs4 import BeautifulSoup
