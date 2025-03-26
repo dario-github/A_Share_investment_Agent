@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 
 from src.tools.api import prices_to_df
+from src.tools.data_protocol import PriceDataProtocol
 
 
 ##### Technical Analyst #####
@@ -21,100 +22,156 @@ def technical_analyst_agent(state: AgentState):
     show_reasoning = state["metadata"]["show_reasoning"]
     data = state["data"]
 
-    # 尝试获取价格数据，兼容不同的键名
-    if "price_history" in data:
-        prices_df = data["price_history"]
-    elif "prices" in data:
-        prices = data["prices"]
-        prices_df = prices_to_df(prices)
-    else:
-        # 如果找不到价格数据，返回中性信号
-        message_content = {
-            "signal": "neutral",
-            "confidence": "0%",
-            "reasoning": {"error": "No price data found in state"}
-        }
-        message = HumanMessage(
-            content=json.dumps(message_content),
-            name="technicals",
-        )
-        return {
-            "messages": [message],
-            "data": data,
-        }
-
-    # 确保 prices_df 不为空
-    if prices_df is None or len(prices_df) < 20:  # 至少需要20个数据点
-        message_content = {
-            "signal": "neutral",
-            "confidence": "0%",
-            "reasoning": {"error": "Insufficient price data for technical analysis"}
-        }
-        message = HumanMessage(
-            content=json.dumps(message_content),
-            name="technicals",
-        )
-        return {
-            "messages": [message],
-            "data": data,
-        }
-
-    # 计算各种技术分析策略的信号
     try:
-        trend_signals = calculate_trend_signals(prices_df)
-        mean_reversion_signals = calculate_mean_reversion_signals(prices_df)
-        momentum_signals = calculate_momentum_signals(prices_df)
-        volatility_signals = calculate_volatility_signals(prices_df)
-        stat_arb_signals = calculate_stat_arb_signals(prices_df)
+        # 尝试获取价格数据，兼容不同的键名
+        if "price_history" in data:
+            if isinstance(data["price_history"], pd.DataFrame):
+                prices_df = data["price_history"]
+            else:
+                prices_df = PriceDataProtocol.standardize(data["price_history"])
+        elif "prices_meta" in data and "data" in data["prices_meta"]:
+            # 使用带元数据的价格数据
+            print("使用带元数据的价格数据进行技术分析")
+            prices_df = PriceDataProtocol.standardize(data["prices_meta"]["data"])
+        elif "prices" in data:
+            prices = data["prices"]
+            print(f"处理价格数据，类型: {type(prices)}, 数据长度: {len(prices) if isinstance(prices, list) else '未知'}")
 
-        # 安全检查：确保所有信号的 confidence 值不是 NaN
-        for signal_dict in [trend_signals, mean_reversion_signals, momentum_signals, volatility_signals, stat_arb_signals]:
-            if pd.isna(signal_dict['confidence']):
-                signal_dict['confidence'] = 0.5  # 使用默认值0.5替代NaN
+            # 如果直接是DataFrame，不需要转换
+            if isinstance(prices, pd.DataFrame):
+                prices_df = prices
+            else:
+                # 使用数据协议进行标准化
+                prices_df = PriceDataProtocol.standardize(prices)
+        else:
+            # 如果找不到价格数据，返回中性信号
+            print("未找到价格数据")
+            message_content = {
+                "signal": "neutral",
+                "confidence": "0%",
+                "reasoning": {"error": "No price data found in state"}
+            }
+            message = HumanMessage(
+                content=json.dumps(message_content),
+                name="technicals",
+            )
+            return {
+                "messages": [message],
+                "data": data,
+            }
 
-        # 组合不同策略的信号
-        combined_signal = weighted_signal_combination(
-            [
-                trend_signals,
-                mean_reversion_signals,
-                momentum_signals,
-                volatility_signals,
-                stat_arb_signals
-            ],
-            [0.3, 0.2, 0.25, 0.15, 0.1]  # 权重
-        )
+        # 确保 prices_df 不为空
+        if prices_df is None or len(prices_df) < 20:  # 至少需要20个数据点
+            print(f"价格数据点不足，当前长度: {len(prices_df) if prices_df is not None else 0}")
+            message_content = {
+                "signal": "neutral",
+                "confidence": "0%",
+                "reasoning": {"error": "Insufficient price data for technical analysis"}
+            }
+            message = HumanMessage(
+                content=json.dumps(message_content),
+                name="technicals",
+            )
+            return {
+                "messages": [message],
+                "data": data,
+            }
 
-        # 构建分析报告
-        analysis_report = {
-            "signal": combined_signal['signal'],
-            "confidence": f"{round(float(combined_signal['confidence']) * 100)}%",
-            "strategy_signals": {
-                "trend_following": {
-                    "signal": trend_signals['signal'],
-                    "confidence": f"{round(float(trend_signals['confidence']) * 100)}%",
-                    "metrics": normalize_pandas(trend_signals['metrics'])
-                },
-                "mean_reversion": {
-                    "signal": mean_reversion_signals['signal'],
-                    "confidence": f"{round(float(mean_reversion_signals['confidence']) * 100)}%",
-                    "metrics": normalize_pandas(mean_reversion_signals['metrics'])
-                },
-                "momentum": {
-                    "signal": momentum_signals['signal'],
-                    "confidence": f"{round(float(momentum_signals['confidence']) * 100)}%",
-                    "metrics": normalize_pandas(momentum_signals['metrics'])
-                },
-                "volatility": {
-                    "signal": volatility_signals['signal'],
-                    "confidence": f"{round(float(volatility_signals['confidence']) * 100)}%",
-                    "metrics": normalize_pandas(volatility_signals['metrics'])
-                },
-                "statistical_arbitrage": {
-                    "signal": stat_arb_signals['signal'],
-                    "confidence": f"{round(float(stat_arb_signals['confidence']) * 100)}%",
-                    "metrics": normalize_pandas(stat_arb_signals['metrics'])
+        # 记录处理的数据信息
+        print(f"开始技术分析，数据点数量: {len(prices_df)}")
+        print(f"数据列: {list(prices_df.columns)}")
+
+        # 计算各种技术分析策略的信号
+        try:
+            trend_signals = calculate_trend_signals(prices_df)
+            mean_reversion_signals = calculate_mean_reversion_signals(prices_df)
+            momentum_signals = calculate_momentum_signals(prices_df)
+            volatility_signals = calculate_volatility_signals(prices_df)
+            stat_arb_signals = calculate_stat_arb_signals(prices_df)
+
+            # 安全检查：确保所有信号的 confidence 值不是 NaN
+            for signal_dict in [trend_signals, mean_reversion_signals, momentum_signals, volatility_signals, stat_arb_signals]:
+                if pd.isna(signal_dict['confidence']):
+                    signal_dict['confidence'] = 0.5  # 使用默认值0.5替代NaN
+
+            # 组合不同策略的信号
+            combined_signal = weighted_signal_combination(
+                [
+                    trend_signals,
+                    mean_reversion_signals,
+                    momentum_signals,
+                    volatility_signals,
+                    stat_arb_signals
+                ],
+                [0.3, 0.2, 0.25, 0.15, 0.1]  # 权重
+            )
+
+            # 构建分析报告
+            analysis_report = {
+                "signal": combined_signal['signal'],
+                "confidence": f"{round(float(combined_signal['confidence']) * 100)}%",
+                "strategy_signals": {
+                    "trend_following": {
+                        "signal": trend_signals['signal'],
+                        "confidence": f"{round(float(trend_signals['confidence']) * 100)}%",
+                        "metrics": normalize_pandas(trend_signals['metrics'])
+                    },
+                    "mean_reversion": {
+                        "signal": mean_reversion_signals['signal'],
+                        "confidence": f"{round(float(mean_reversion_signals['confidence']) * 100)}%",
+                        "metrics": normalize_pandas(mean_reversion_signals['metrics'])
+                    },
+                    "momentum": {
+                        "signal": momentum_signals['signal'],
+                        "confidence": f"{round(float(momentum_signals['confidence']) * 100)}%",
+                        "metrics": normalize_pandas(momentum_signals['metrics'])
+                    },
+                    "volatility": {
+                        "signal": volatility_signals['signal'],
+                        "confidence": f"{round(float(volatility_signals['confidence']) * 100)}%",
+                        "metrics": normalize_pandas(volatility_signals['metrics'])
+                    },
+                    "statistical_arbitrage": {
+                        "signal": stat_arb_signals['signal'],
+                        "confidence": f"{round(float(stat_arb_signals['confidence']) * 100)}%",
+                        "metrics": normalize_pandas(stat_arb_signals['metrics'])
+                    }
                 }
             }
+        except Exception as e:
+            # 捕获所有异常，返回中性信号
+            print(f"Technical analysis error: {str(e)}")
+            message_content = {
+                "signal": "neutral",
+                "confidence": "0%",
+                "reasoning": {"error": f"Error in technical analysis: {str(e)}"}
+            }
+            message = HumanMessage(
+                content=json.dumps(message_content),
+                name="technicals",
+            )
+            return {
+                "messages": [message],
+                "data": data,
+            }
+
+        message_content = {
+            "signal": analysis_report["signal"],
+            "confidence": analysis_report["confidence"],
+            "reasoning": analysis_report["strategy_signals"]
+        }
+
+        message = HumanMessage(
+            content=json.dumps(message_content),
+            name="technicals",
+        )
+
+        if show_reasoning:
+            show_agent_reasoning(message_content, "Technical Analysis Agent")
+
+        return {
+            "messages": [message],
+            "data": data,
         }
     except Exception as e:
         # 捕获所有异常，返回中性信号
@@ -132,25 +189,6 @@ def technical_analyst_agent(state: AgentState):
             "messages": [message],
             "data": data,
         }
-
-    message_content = {
-        "signal": analysis_report["signal"],
-        "confidence": analysis_report["confidence"],
-        "reasoning": analysis_report["strategy_signals"]
-    }
-
-    message = HumanMessage(
-        content=json.dumps(message_content),
-        name="technicals",
-    )
-
-    if show_reasoning:
-        show_agent_reasoning(message_content, "Technical Analysis Agent")
-
-    return {
-        "messages": [message],
-        "data": data,
-    }
 
 
 def calculate_trend_signals(prices_df):

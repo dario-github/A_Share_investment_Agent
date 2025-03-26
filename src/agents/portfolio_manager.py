@@ -19,16 +19,60 @@ def portfolio_management_agent(state: AgentState):
     initial_position = portfolio.get("initial_position", 0)  # 默认0
 
     # Get the technical analyst, fundamentals agent, and risk management agent messages
-    technical_message = next(
-        msg for msg in state["messages"] if msg.name == "technical_analyst_agent")
-    fundamentals_message = next(
-        msg for msg in state["messages"] if msg.name == "fundamentals_agent")
-    sentiment_message = next(
-        msg for msg in state["messages"] if msg.name == "sentiment_agent")
-    valuation_message = next(
-        msg for msg in state["messages"] if msg.name == "valuation_agent")
-    risk_message = next(
-        msg for msg in state["messages"] if msg.name == "risk_management_agent")
+    try:
+        technical_message = next(
+            msg for msg in state["messages"] if msg.name == "technical_analyst_agent")
+    except StopIteration:
+        # 如果没有找到技术分析消息，创建一个默认消息
+        print("警告: 未找到技术分析消息，使用默认值")
+        technical_message = HumanMessage(
+            content="未提供技术分析数据。",
+            name="technical_analyst_agent"
+        )
+
+    try:
+        fundamentals_message = next(
+            msg for msg in state["messages"] if msg.name == "fundamentals_agent")
+    except StopIteration:
+        # 如果没有找到基本面分析消息，创建一个默认消息
+        print("警告: 未找到基本面分析消息，使用默认值")
+        fundamentals_message = HumanMessage(
+            content="未提供基本面分析数据。",
+            name="fundamentals_agent"
+        )
+
+    try:
+        sentiment_message = next(
+            msg for msg in state["messages"] if msg.name == "sentiment_agent")
+    except StopIteration:
+        # 如果没有找到情绪分析消息，创建一个默认消息
+        print("警告: 未找到情绪分析消息，使用默认值")
+        sentiment_message = HumanMessage(
+            content="未提供情绪分析数据。",
+            name="sentiment_agent"
+        )
+
+    try:
+        valuation_message = next(
+            msg for msg in state["messages"] if msg.name == "valuation_agent")
+    except StopIteration:
+        # 如果没有找到估值分析消息，创建一个默认消息
+        print("警告: 未找到估值分析消息，使用默认值")
+        valuation_message = HumanMessage(
+            content="未提供估值分析数据。",
+            name="valuation_agent"
+        )
+
+    try:
+        risk_message = next(
+            msg for msg in state["messages"] if msg.name == "risk_management_agent")
+    except StopIteration:
+        # 如果没有找到风险管理消息，创建一个默认消息
+        print("警告: 未找到风险管理消息，使用默认值")
+        risk_message = HumanMessage(
+            content="未提供风险管理数据。",
+            name="risk_management_agent"
+        )
 
     # Create the system message
     system_message = {

@@ -2,6 +2,7 @@ from typing import Dict, Any, List
 import pandas as pd
 import sys
 import os
+import concurrent.futures
 
 # 导入akshare配置模块
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -17,6 +18,9 @@ import numpy as np
 import time
 import functools
 import random
+
+# 引入数据协议类
+from src.tools.data_protocol import PriceDataProtocol
 
 
 def retry_on_exception(max_retries=3, initial_delay=1, backoff_factor=2, exceptions=(Exception,)):
@@ -450,38 +454,73 @@ _cache_expiry = {}
 
 @retry_on_exception(max_retries=3, initial_delay=2, backoff_factor=2)
 def get_market_data(symbol: str) -> Dict[str, Any]:
-    """获取市场数据"""
+    """获取市场数据
+
+    Args:
+        symbol: 股票代码
+
+    Returns:
+        市场数据
+    """
     # 检查缓存
     cache_key = f"market_data_{symbol}"
     current_time = datetime.now()
 
-    # 如果缓存存在且未过期（缓存1小时），则返回缓存数据
-    if cache_key in _market_data_cache and _cache_expiry.get(cache_key, datetime.min) > current_time:
+    # 如果缓存存在且未过期，直接返回缓存数据
+    if (cache_key in _market_data_cache and
+        _cache_expiry.get(cache_key, datetime.min) > current_time):
         print(f"使用缓存的市场数据 (symbol={symbol})")
         return _market_data_cache[cache_key]
 
-    # 获取实时行情
-    print(f"获取 {symbol} 的市场数据...")
-    print("请耐心等待，这可能需要一些时间...")
+    start_time = time.time()
 
-    # 定义数据获取函数，支持多种数据源
-    def get_data_from_source(source_name, get_data_func):
-        """从指定数据源获取数据"""
-        try:
-            print(f"尝试从{source_name}获取数据...")
-            start_time = time.time()
-            data = get_data_func()
-            elapsed_time = time.time() - start_time
+    # 尝试直接获取（从最快的数据源）
+    try:
+        # 从腾讯财经直接获取（通常最快）
+        print(f"直接获取 {symbol} 的市场数据...")
+        # 判断股票代码前缀
+        prefix = "sh" if symbol.startswith(("6", "9")) else "sz"
+        realtime_data = ak.stock_zh_a_daily(symbol=f"{prefix}{symbol}", adjust="")
 
-            if data is not None:
-                print(f"成功从{source_name}获取数据，耗时 {elapsed_time:.2f} 秒")
-                return data
+        if realtime_data is not None and not realtime_data.empty:
+            # 获取最新一天的数据
+            latest_data = realtime_data.iloc[-1]
+
+            # 获取52周最高最低价
+            if len(realtime_data) >= 250:  # 约一年的交易日
+                year_data = realtime_data.iloc[-250:]
+                fifty_two_week_high = year_data['high'].max()
+                fifty_two_week_low = year_data['low'].min()
             else:
-                print(f"从{source_name}获取数据失败，返回None")
-                return None
-        except Exception as e:
-            print(f"从{source_name}获取数据时出错: {e}")
-            return None
+                fifty_two_week_high = realtime_data['high'].max()
+                fifty_two_week_low = realtime_data['low'].min()
+
+            # 构建结果
+            result = {
+                "market_cap": 0,  # 腾讯数据没有市值信息
+                "volume": float(latest_data.get("volume", 0)),
+                "average_volume": float(realtime_data['volume'].mean()),
+                "fifty_two_week_high": float(fifty_two_week_high),
+                "fifty_two_week_low": float(fifty_two_week_low),
+                "is_expired_cache": False,
+                "data_source": "腾讯财经",
+                "price": float(latest_data.get("close", 0))
+            }
+
+            elapsed = time.time() - start_time
+            print(f"直接获取成功，耗时 {elapsed:.2f} 秒")
+
+            # 更新缓存
+            _market_data_cache[cache_key] = result
+            # 缓存保留1小时
+            _cache_expiry[cache_key] = current_time + timedelta(hours=1)
+
+            return result
+    except Exception as e:
+        print(f"直接获取失败: {e}，尝试其他数据源...")
+
+    # 如果直接获取失败，尝试通过定义的数据源获取
+    # 使用原有的逻辑，但优化超时处理
 
     # 从东方财富获取数据
     def get_data_from_eastmoney():
@@ -541,63 +580,37 @@ def get_market_data(symbol: str) -> Dict[str, Any]:
             print(f"处理新浪数据时出错: {e}")
             return None
 
-    # 从腾讯获取数据
-    def get_data_from_tencent():
-        try:
-            # 判断股票代码前缀
-            prefix = "sh" if symbol.startswith(("6", "9")) else "sz"
-            realtime_data = ak.stock_zh_a_daily(symbol=f"{prefix}{symbol}", adjust="")
-
-            if realtime_data is None or realtime_data.empty:
-                return None
-
-            # 获取最新一天的数据
-            latest_data = realtime_data.iloc[-1]
-
-            # 获取52周最高最低价
-            if len(realtime_data) >= 250:  # 约一年的交易日
-                year_data = realtime_data.iloc[-250:]
-                fifty_two_week_high = year_data['high'].max()
-                fifty_two_week_low = year_data['low'].min()
-            else:
-                fifty_two_week_high = realtime_data['high'].max()
-                fifty_two_week_low = realtime_data['low'].min()
-
-            # 构建结果 - 腾讯数据没有市值信息，使用估算值
-            # 市值 = 收盘价 * 流通股本，这里我们没有流通股本，所以这只是一个占位符
-            result = {
-                "market_cap": 0,  # 腾讯数据没有市值信息
-                "volume": float(latest_data.get("volume", 0)),
-                "average_volume": float(realtime_data['volume'].mean()),
-                "fifty_two_week_high": float(fifty_two_week_high),
-                "fifty_two_week_low": float(fifty_two_week_low),
-                "is_expired_cache": False,
-                "data_source": "腾讯财经",
-                "price": float(latest_data.get("close", 0))
-            }
-
-            return result
-        except Exception as e:
-            print(f"处理腾讯数据时出错: {e}")
-            return None
-
-    # 尝试从不同数据源获取数据
+    # 更高效地获取和处理数据源
     data_sources = [
         ("东方财富", get_data_from_eastmoney),
-        ("新浪财经", get_data_from_sina),
-        ("腾讯财经", get_data_from_tencent)
+        ("新浪财经", get_data_from_sina)
     ]
 
+    # 并行获取数据
     result = None
     error_messages = []
 
-    for source_name, get_data_func in data_sources:
-        result = get_data_from_source(source_name, get_data_func)
-        if result is not None:
-            print(f"成功从{source_name}获取市场数据")
-            break
-        else:
-            error_messages.append(f"从{source_name}获取数据失败")
+    # 使用线程池并发执行请求
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        # 提交所有任务
+        future_to_source = {
+            executor.submit(lambda func: func(), get_data_func): source_name
+            for source_name, get_data_func in data_sources
+        }
+
+        # 获取最快返回的有效结果
+        for future in concurrent.futures.as_completed(future_to_source, timeout=5):
+            source_name = future_to_source[future]
+            try:
+                data = future.result(timeout=2)  # 单个结果超时设置为2秒
+                if data is not None:
+                    result = data
+                    print(f"成功从{source_name}获取市场数据")
+                    break  # 一旦获得一个有效结果就停止等待
+                else:
+                    error_messages.append(f"从{source_name}获取数据失败")
+            except Exception as e:
+                error_messages.append(f"从{source_name}获取数据出错: {str(e)}")
 
     # 如果所有数据源都失败，检查缓存
     if result is None:
@@ -622,7 +635,7 @@ def get_market_data(symbol: str) -> Dict[str, Any]:
         # 尝试从其他数据源补充市值数据
         for source_name, get_data_func in data_sources:
             if source_name != result["data_source"]:
-                supplementary_data = get_data_from_source(source_name, get_data_func)
+                supplementary_data = get_data_func()
                 if supplementary_data is not None and supplementary_data.get("market_cap", 0) > 0:
                     result["market_cap"] = supplementary_data["market_cap"]
                     print(f"使用{source_name}的市值数据进行补充")
@@ -634,10 +647,10 @@ def get_market_data(symbol: str) -> Dict[str, Any]:
 
     # 更新缓存
     _market_data_cache[cache_key] = result
-    # 缓存保留1小时
-    _cache_expiry[cache_key] = current_time + timedelta(hours=1)
+    # 缓存保留较短时间（当日行情数据变化快）
+    _cache_expiry[cache_key] = current_time + timedelta(minutes=30)
 
-    print(f"成功获取 {symbol} 的市场数据")
+    print(f"成功获取 {symbol} 的市场数据，总耗时 {time.time() - start_time:.2f} 秒")
     return result
 
 
@@ -686,7 +699,13 @@ def get_price_history(symbol: str, start_date: str = None, end_date: str = None,
         # 检查缓存
         if cache_key in _price_history_cache and _price_cache_expiry.get(cache_key, datetime.min) > current_date:
             print(f"使用缓存的历史价格数据 (symbol={symbol}, start={start_date.strftime('%Y-%m-%d')}, end={end_date.strftime('%Y-%m-%d')})")
-            return _price_history_cache[cache_key]
+            df = _price_history_cache[cache_key]
+
+            # 验证缓存的数据
+            if validate_price_data(df, symbol):
+                return df
+            else:
+                print("缓存数据无效，重新获取")
 
         print(f"\n正在获取 {symbol} 的历史行情数据...")
         print(f"开始日期：{start_date.strftime('%Y-%m-%d')}")
@@ -1017,89 +1036,76 @@ def get_price_history(symbol: str, start_date: str = None, end_date: str = None,
             for col, nan_count in nan_columns[nan_columns > 0].items():
                 print(f"- {col}: {nan_count}条")
 
-        # 更新缓存
-        _price_history_cache[cache_key] = df
-        # 缓存保留24小时
-        _price_cache_expiry[cache_key] = current_date + timedelta(hours=24)
+        # 在返回数据前进行验证
+        final_elapsed_time = time.time() - start_time
+        print(f"技术指标计算完成，耗时 {final_elapsed_time:.2f} 秒")
 
-        return df
+        # 验证最终数据
+        if validate_price_data(df, symbol):
+            # 更新缓存
+            _price_history_cache[cache_key] = df
+            _price_cache_expiry[cache_key] = current_date + timedelta(hours=12)  # 设置12小时过期
+
+            return df
+        else:
+            print(f"警告：获取的价格数据不完整或格式不正确，请检查！")
+            return pd.DataFrame(columns=['close', 'open', 'high', 'low', 'volume', 'date'])
 
     except Exception as e:
-        print(f"获取历史行情数据时出错：{e}")
-
-        # 如果有缓存但已过期，在出错时仍然返回过期的缓存数据
-        cache_key = f"price_history_{symbol}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}_{adjust}"
-        if cache_key in _price_history_cache:
-            print(f"使用过期的缓存数据")
-            return _price_history_cache[cache_key]
-
+        print(f"获取历史价格数据时出错: {str(e)}")
         return pd.DataFrame()
+
+
+def validate_price_data(df, symbol):
+    """验证价格数据的完整性和格式"""
+    try:
+        if df is None or df.empty:
+            print(f"警告: {symbol} 的价格数据为空")
+            return False
+
+        # 检查必要列是否存在
+        required_columns = ['close', 'open', 'high', 'low', 'volume']
+        missing_columns = [col for col in required_columns if col not in df.columns]
+
+        if missing_columns:
+            print(f"警告: {symbol} 的价格数据缺少必要列 {', '.join(missing_columns)}")
+            print(f"现有列: {list(df.columns)}")
+            return False
+
+        # 检查数据类型
+        for col in required_columns:
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                print(f"警告: {symbol} 的价格数据列 '{col}' 不是数值类型")
+                return False
+
+        # 检查是否有无效值
+        for col in required_columns:
+            if df[col].isna().any():
+                print(f"警告: {symbol} 的价格数据列 '{col}' 包含NaN值")
+                df = df.dropna(subset=[col])
+                if df.empty:
+                    return False
+
+        # 检查是否有有效的交易日数据
+        min_required = 20
+        if len(df) < min_required:
+            print(f"警告: {symbol} 的价格数据记录数 ({len(df)}) 少于最小要求 ({min_required})")
+            return False
+
+        print(f"价格数据验证通过: {symbol}, 共 {len(df)} 条记录")
+        return True
+    except Exception as e:
+        print(f"验证价格数据时出错: {str(e)}")
+        return False
 
 
 def prices_to_df(prices):
     """Convert price data to DataFrame with standardized column names"""
     try:
-        # 检查输入是否为空
-        if prices is None or (isinstance(prices, (list, dict)) and len(prices) == 0):
-            raise ValueError("价格数据为空")
-
-        df = pd.DataFrame(prices)
-
-        # 标准化列名映射
-        column_mapping = {
-            '收盘': 'close',
-            '开盘': 'open',
-            '最高': 'high',
-            '最低': 'low',
-            '成交量': 'volume',
-            '成交额': 'amount',
-            '振幅': 'amplitude',
-            '涨跌幅': 'change_percent',
-            '涨跌额': 'change_amount',
-            '换手率': 'turnover_rate'
-        }
-
-        # 重命名列
-        for cn, en in column_mapping.items():
-            if cn in df.columns:
-                df[en] = df[cn]
-
-        # 检查必要的列是否存在
-        required_columns = ['close', 'open', 'high', 'low', 'volume']
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            raise ValueError(f"缺少必要的价格数据列: {', '.join(missing_columns)}")
-
-        # 检查数据类型和有效性
-        for col in ['close', 'open', 'high', 'low']:
-            if col in df.columns:
-                # 将非数值数据转换为NaN
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-
-                # 检查是否有NaN值
-                if df[col].isna().any():
-                    raise ValueError(f"'{col}'列包含无效的数值数据")
-
-                # 检查是否有零或负值
-                if (df[col] <= 0).any():
-                    raise ValueError(f"'{col}'列包含零或负值，这对价格数据无效")
-
-        if 'volume' in df.columns:
-            # 将非数值数据转换为NaN
-            df['volume'] = pd.to_numeric(df['volume'], errors='coerce')
-
-            # 检查是否有NaN值
-            if df['volume'].isna().any():
-                raise ValueError("'volume'列包含无效的数值数据")
-
-            # 检查是否有负值
-            if (df['volume'] < 0).any():
-                raise ValueError("'volume'列包含负值，这对成交量数据无效")
-
-        return df
+        # 使用数据协议类的标准化方法
+        return PriceDataProtocol.standardize(prices)
     except Exception as e:
         print(f"转换价格数据时出错: {str(e)}")
-        # 不返回默认值，而是重新抛出异常
         raise ValueError(f"价格数据处理失败: {str(e)}")
 
 

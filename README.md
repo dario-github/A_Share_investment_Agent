@@ -642,3 +642,51 @@ Market Data Analyst → [Technical/Fundamentals/Sentiment/Valuation Analyst] →
 ## 致谢
 
 本项目修改自 [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund.git)。我们衷心感谢原作者的出色工作和启发。原项目为我们针对 A 股市场的适配和改进提供了坚实的基础。
+
+## 系统维护与问题排查
+
+如果您在使用过程中遇到数据加载问题，可能是缓存文件损坏造成的。系统提供了自动修复工具：
+
+### 缓存文件检查和修复
+
+我们提供了`fix_cache.py`脚本来检查和修复系统缓存问题：
+
+```bash
+# 检查缓存文件
+python fix_cache.py --check
+
+# 修复股票名称缓存
+python fix_cache.py --repair
+
+# 重置所有缓存（会先备份）
+python fix_cache.py --reset
+
+# 检查并自动修复
+python fix_cache.py --check --repair
+```
+
+### 常见错误与解决方案
+
+#### 1. 股票名称数据加载错误
+
+错误信息：`Expecting value: line 1 column 1 (char 0)`
+
+这通常是由于缓存文件损坏导致的。解决方法：
+
+```bash
+# 修复股票名称缓存
+python fix_cache.py --repair
+```
+
+#### 2. 历史数据加载失败
+
+尝试重置缓存：
+
+```bash
+# 重置所有缓存
+python fix_cache.py --reset
+```
+
+#### 3. 网络请求超时
+
+系统会自动重试，但如果问题持续存在，可能需要检查网络连接或代理设置。

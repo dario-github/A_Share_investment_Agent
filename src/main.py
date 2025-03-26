@@ -13,6 +13,9 @@ from langchain_core.messages import HumanMessage
 import akshare as ak
 import pandas as pd
 
+# 导入数据提供层
+from src.tools.data_provider import get_historical_data, get_market_data, get_stock_name
+
 
 ##### Run the Hedge Fund #####
 def run_hedge_fund(ticker: str, start_date: str, end_date: str, portfolio: dict, show_reasoning: bool = False, num_of_news: int = 5):
@@ -143,36 +146,24 @@ def get_historical_data(symbol: str) -> pd.DataFrame:
     print(f"目标开始日期：{target_start_date.strftime('%Y-%m-%d')}")
     print(f"结束日期：{end_date.strftime('%Y-%m-%d')}")
 
-    try:
-        # Get historical data
-        df = ak.stock_zh_a_hist(symbol=symbol,
-                                period="daily",
-                                start_date=target_start_date.strftime(
-                                    "%Y%m%d"),
-                                end_date=end_date.strftime("%Y%m%d"),
-                                adjust="qfq")
+    # 使用数据提供层获取数据，带有缓存机制
+    df = get_historical_data(
+        symbol=symbol,
+        start_date=target_start_date.strftime('%Y-%m-%d'),
+        end_date=end_date.strftime('%Y-%m-%d')
+    )
 
-        actual_days = len(df)
-        target_days = 365  # Target: 1 year of data
+    # 检查数据是否为空
+    if df is None or df.empty:
+        print(f"获取历史数据失败，无法获取 {symbol} 的数据")
+        return pd.DataFrame()
 
-        if actual_days < target_days:
-            print(f"提示：实际获取到的数据天数({actual_days}天)少于目标天数({target_days}天)")
-            print(f"将使用可获取到的所有数据进行分析")
+    actual_days = len(df)
+    target_days = 365  # Target: 1 year of data
 
-        print(f"成功获取历史行情数据，共 {actual_days} 条记录\n")
-        return df
+    if actual_days < target_days:
+        print(f"提示：实际获取到的数据天数({actual_days}天)少于目标天数({target_days}天)")
+        print(f"将使用可获取到的所有数据进行分析")
 
-    except Exception as e:
-        print(f"获取历史数据时发生错误: {str(e)}")
-        print("将尝试获取最近可用的数据...")
-
-        # Try to get whatever data is available
-        try:
-            df = ak.stock_zh_a_hist(symbol=symbol,
-                                    period="daily",
-                                    adjust="qfq")
-            print(f"成功获取历史行情数据，共 {len(df)} 条记录\n")
-            return df
-        except Exception as e:
-            print(f"获取历史数据失败: {str(e)}")
-            return pd.DataFrame()
+    print(f"成功获取历史行情数据，共 {actual_days} 条记录\n")
+    return df

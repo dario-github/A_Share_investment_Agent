@@ -9,15 +9,19 @@ from streamlit_lottie import st_lottie
 import requests
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 import base64
 from io import BytesIO
 import matplotlib.pyplot as plt
 import sys
 import streamlit.components.v1 as components
+import pickle
 
 # 添加项目根目录到系统路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# 导入数据提供层
+from src.tools.data_provider import get_historical_data, get_market_data, get_stock_name, load_stock_names
 
 # 导入akshare配置模块
 try:
@@ -532,9 +536,61 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 获取股票简称的函数
+# 定义缓存文件路径
+STOCK_NAMES_CACHE_FILE = "stock_names_cache.pkl"
+
+# 初始化股票名称数据
+def init_stock_names():
+    """
+    初始化股票名称数据，程序启动时调用
+    如果本地缓存文件存在且不超过一周，直接使用缓存
+    否则重新获取股票数据并保存到本地文件
+    """
+    try:
+        # 检查缓存文件是否存在
+        if os.path.exists(STOCK_NAMES_CACHE_FILE):
+            # 检查文件修改时间
+            file_time = datetime.fromtimestamp(os.path.getmtime(STOCK_NAMES_CACHE_FILE))
+            current_time = datetime.now()
+            # 如果文件修改时间不超过一周，直接加载
+            if (current_time - file_time) < timedelta(days=7):
+                print(f"缓存文件修改日期: {file_time.strftime('%Y-%m-%d')}, 未超过7天，直接使用")
+                with open(STOCK_NAMES_CACHE_FILE, 'rb') as f:
+                    stock_info_df = pickle.load(f)
+                # 存入会话状态
+                if not hasattr(st, 'session_state'):
+                    return
+                st.session_state.stock_info_df = stock_info_df
+                print(f"成功从缓存加载股票数据，共 {len(stock_info_df)} 条记录")
+                return
+            else:
+                print(f"缓存文件已过期 ({(current_time - file_time).days} 天)，重新获取数据")
+        else:
+            print("未找到缓存文件，从API获取数据")
+
+        # 获取新数据
+        import akshare as ak
+        stock_info_df = ak.stock_info_a_code_name()
+
+        # 保存到本地文件
+        with open(STOCK_NAMES_CACHE_FILE, 'wb') as f:
+            pickle.dump(stock_info_df, f)
+
+        # 存入会话状态
+        if not hasattr(st, 'session_state'):
+            return
+        st.session_state.stock_info_df = stock_info_df
+        print(f"成功获取并缓存股票数据，共 {len(stock_info_df)} 条记录")
+
+    except Exception as e:
+        print(f"初始化股票名称数据时出错: {str(e)}")
+
+# 程序启动时预加载股票名称数据
+load_stock_names()
+
+# 修改获取股票简称的函数
 @st.cache_data(ttl=3600)  # 缓存1小时
-def get_stock_name(ticker):
+def get_stock_name_ui(ticker):
     """
     根据股票代码获取股票简称
 
@@ -545,25 +601,24 @@ def get_stock_name(ticker):
         股票简称，如获取失败则返回"未知股票"
     """
     try:
-        # 使用 stock_info_a_code_name 函数获取所有 A 股的代码和名称
-        st.session_state.log_output.append(f"DEBUG: 正在获取股票 {ticker} 的简称...")
+        # 记录日志
+        if hasattr(st, 'session_state') and hasattr(st.session_state, 'log_output'):
+            st.session_state.log_output.append(f"DEBUG: 正在获取股票 {ticker} 的简称...")
 
-        # 如果缓存中没有股票信息，则获取并缓存
-        if 'stock_info_df' not in st.session_state:
-            st.session_state.log_output.append(f"DEBUG: 首次获取所有股票代码和名称...")
-            st.session_state.stock_info_df = ak.stock_info_a_code_name()
-            st.session_state.log_output.append(f"DEBUG: 成功获取所有股票代码和名称")
+        # 使用数据提供层获取股票名称
+        stock_name = get_stock_name(ticker)
 
-        # 查找对应的股票
-        stock_info = st.session_state.stock_info_df[st.session_state.stock_info_df['code'] == ticker]
-        if not stock_info.empty:
-            stock_name = stock_info['name'].values[0]
-            st.session_state.log_output.append(f"DEBUG: 成功获取股票简称: {stock_name}")
+        if stock_name != "未知股票":
+            if hasattr(st, 'session_state') and hasattr(st.session_state, 'log_output'):
+                st.session_state.log_output.append(f"DEBUG: 成功获取股票简称: {stock_name}")
             return stock_name
-        st.session_state.log_output.append(f"DEBUG: 未找到股票代码 {ticker} 对应的简称")
+
+        if hasattr(st, 'session_state') and hasattr(st.session_state, 'log_output'):
+            st.session_state.log_output.append(f"DEBUG: 未找到股票代码 {ticker} 对应的简称")
         return "未知股票"
     except Exception as e:
-        st.session_state.log_output.append(f"ERROR: 获取股票简称时出错: {str(e)}")
+        if hasattr(st, 'session_state') and hasattr(st.session_state, 'log_output'):
+            st.session_state.log_output.append(f"ERROR: 获取股票简称时出错: {str(e)}")
         return "未知股票"
 
 @st.cache_data(ttl=3600)  # 缓存1小时
@@ -857,7 +912,7 @@ def get_financial_metrics_cached(symbol):
 if ticker and validate_ticker(ticker):
     # 获取股票简称
     with st.spinner("正在获取股票信息..."):
-        stock_name = get_stock_name(ticker)
+        stock_name = get_stock_name_ui(ticker)
 
     # 如果分析已完成，尝试从日志中提取更准确的股票名称
     if st.session_state.analysis_complete:
@@ -983,6 +1038,15 @@ if run_button:
         "--holding-cost", str(holding_cost),
         "--num-of-news", str(num_of_news)
     ]
+
+    # 当前日期和历史数据的日期范围
+    current_date = datetime.now()
+    end_date = current_date - timedelta(days=1)  # 昨天
+    start_date = end_date - timedelta(days=365)  # 一年前
+
+    # 添加日期参数
+    cmd_args.extend(["--start-date", start_date.strftime('%Y-%m-%d')])
+    cmd_args.extend(["--end-date", end_date.strftime('%Y-%m-%d')])
 
     if show_reasoning:
         cmd_args.append("--show-reasoning")

@@ -3,6 +3,7 @@ from src.tools.openrouter_config import get_chat_completion
 
 from src.agents.state import AgentState
 from src.tools.api import get_financial_metrics, get_financial_statements, get_market_data, get_price_history
+from src.tools.data_protocol import PriceDataProtocol
 
 from datetime import datetime, timedelta
 import pandas as pd
@@ -38,8 +39,24 @@ def market_data_agent(state: AgentState):
     prices_df = get_price_history(ticker, start_date, end_date)
     if prices_df is None or prices_df.empty:
         print(f"警告：无法获取{ticker}的价格数据，将使用空数据继续")
-        prices_df = pd.DataFrame(
-            columns=['close', 'open', 'high', 'low', 'volume'])
+        prices_df = pd.DataFrame(columns=['close', 'open', 'high', 'low', 'volume'])
+
+    # 使用数据协议类压缩数据
+    try:
+        # 记录原始数据信息
+        print(f"价格数据获取完成，共 {len(prices_df)} 条记录")
+
+        # 使用数据协议类进行标准化和压缩
+        compact_prices = PriceDataProtocol.compress(prices_df)
+
+        # 创建带元数据的价格数据
+        prices_meta = PriceDataProtocol.create_meta_data(compact_prices)
+
+        print(f"价格数据处理完成，压缩后 {len(compact_prices)} 条记录")
+    except Exception as e:
+        print(f"价格数据处理失败: {str(e)}")
+        compact_prices = []
+        prices_meta = {"meta": {"error": str(e)}, "data": []}
 
     # 获取财务指标
     try:
@@ -64,8 +81,7 @@ def market_data_agent(state: AgentState):
 
     # 确保数据格式正确
     if not isinstance(prices_df, pd.DataFrame):
-        prices_df = pd.DataFrame(
-            columns=['close', 'open', 'high', 'low', 'volume'])
+        prices_df = pd.DataFrame(columns=['close', 'open', 'high', 'low', 'volume'])
 
     # 优化价格数据，减少重复信息
     # 1. 只保留必要的列
@@ -199,6 +215,7 @@ def market_data_agent(state: AgentState):
         "data": {
             **data,
             "prices": compact_prices,
+            "prices_meta": prices_meta,  # 添加带元数据的价格数据
             "start_date": start_date,
             "end_date": end_date,
             "financials": compact_financials,
